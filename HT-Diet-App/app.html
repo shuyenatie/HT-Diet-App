@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#2E7D32">
+  <title>HT健康饮食日记</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="page-index" class="page active"></div>
+    <div id="page-record" class="page"></div>
+    <div id="page-plan" class="page"></div>
+    <div id="page-history" class="page"></div>
+    <div id="page-profile" class="page"></div>
+
+    <nav id="tabbar">
+      <div class="tab-item active" data-page="index">
+        <span class="tab-icon">🏠</span>
+        <span class="tab-label">首页</span>
+      </div>
+      <div class="tab-item" data-page="record">
+        <span class="tab-icon">📝</span>
+        <span class="tab-label">记录</span>
+      </div>
+      <div class="tab-item" data-page="plan">
+        <span class="tab-icon">📋</span>
+        <span class="tab-label">计划</span>
+      </div>
+      <div class="tab-item" data-page="history">
+        <span class="tab-icon">📊</span>
+        <span class="tab-label">历史</span>
+      </div>
+      <div class="tab-item" data-page="profile">
+        <span class="tab-icon">👤</span>
+        <span class="tab-label">我的</span>
+      </div>
+    </nav>
+  </div>
+
+  <div id="modal-overlay" class="modal-overlay" style="display:none"></div>
+  <div id="modal-content" class="modal-content" style="display:none"></div>
+
+  <script src="js/food-database.js"></script>
+  <script src="js/diet-calculator.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
