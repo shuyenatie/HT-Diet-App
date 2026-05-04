@@ -7,6 +7,34 @@
   var showCustom = false
   var cart = []
   var editingRecordId = null
+  var editingNutritionHeader = false
+  var _searchTimer = null
+
+  var CONST = {
+    defaultCal: 2000,
+    ringRadius: 45,
+    maxFoodList: 50,
+    defaultWeight: 100,
+    mealRatio: { breakfast: 0.3, lunch: 0.4, dinner: 0.3 },
+    searchDelay: 200,
+    weightStep: 10,
+    elasticThreshold: 50
+  }
+
+  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() }
+
+  var COLORS = {
+    highCarb: '#FF6D00', mediumCarb: '#7CB342', lowCarb: '#2196F3',
+    protein: '#4FC3F7', fat: '#FFD54F', carbs: '#CE93D8'
+  }
+  try {
+    COLORS.highCarb = cssVar('--high-carb') || COLORS.highCarb
+    COLORS.mediumCarb = cssVar('--medium-carb') || COLORS.mediumCarb
+    COLORS.lowCarb = cssVar('--low-carb') || COLORS.lowCarb
+    COLORS.protein = cssVar('--nutrient-protein') || COLORS.protein
+    COLORS.fat = cssVar('--nutrient-fat') || COLORS.fat
+    COLORS.carbs = cssVar('--nutrient-carbs') || COLORS.carbs
+  } catch(e) {}
 
   function $(sel) { return document.querySelector(sel) }
   function $$(sel) { return document.querySelectorAll(sel) }
@@ -82,6 +110,7 @@
     showCustom = false
     cart = []
     editingRecordId = null
+    editingNutritionHeader = false
   }
 
   function renderLogin() {
@@ -104,36 +133,58 @@
 
   function renderIndex() {
     var profile = getUserProfile()
+    if (!profile) {
+      $('#page-index').innerHTML = '<div class="card" style="margin:20px;padding:30px;text-align:center"><p style="font-size:16px;margin-bottom:16px">请先设置个人资料</p><button class="primary-btn" onclick="App.switchPage(\'profile\')">去设置</button></div>'
+      return
+    }
     var plan = getTodayPlan()
-    var nutrition = getTodayNutrition()
+    var nutrition = getEffectiveTodayNutrition()
     var records = getTodayRecords()
+    var isManual = hasManualNutrition()
     var dayType = plan && plan.todayType ? plan.todayType : getTodayDayType(profile)
-    var targetCal = plan ? plan.targetCalories : 2000
+    var targetCal = plan ? plan.targetCalories : CONST.defaultCal
     var remain = targetCal - nutrition.calories
-    var pct = Math.min(nutrition.calories / targetCal, 1)
-    var circumference = 2 * Math.PI * 45
+    var pct = targetCal > 0 ? Math.min(nutrition.calories / targetCal, 1) : 0
+    var circumference = 2 * Math.PI * CONST.ringRadius
     var offset = circumference * (1 - pct)
-    var dayLabel = dayType === 'high' ? '🔥 高碳日' : (dayType === 'medium' ? '🌿 中碳日' : '🧘 低碳日')
-    var dayColor = dayType === 'high' ? '#FF6D00' : (dayType === 'medium' ? '#7CB342' : '#2196F3')
+    var dayColor = dayType === 'high' ? COLORS.highCarb : (dayType === 'medium' ? COLORS.mediumCarb : COLORS.lowCarb)
     var greeting = getGreeting()
     var tp = plan ? plan.protein : 0, tf = plan ? plan.fat : 0, tc = plan ? plan.carbs : 0
 
     var html = '<div class="header-card"><div class="header-bg"></div><div class="header-content">'
     html += '<div class="header-top"><div><span class="greeting-text">' + greeting + '</span><span class="date-text">' + formatDate(new Date()) + '</span></div>'
-    html += '<div class="header-right"><div class="day-type-badge" style="border-color:' + dayColor + ';color:' + dayColor + '" onclick="App.showDayTypePicker()"><span class="day-type-emoji">' + (dayType === 'high' ? '🔥' : dayType === 'medium' ? '🌿' : '🧘') + '</span><span>' + (dayType === 'high' ? '高碳日' : dayType === 'medium' ? '中碳日' : '低碳日') + '</span><span class="day-type-arrow">▼</span></div></div></div>'
-    html += '<div class="calorie-ring-wrap"><div class="calorie-ring"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="8"/><circle cx="50" cy="50" r="45" fill="none" stroke="#fff" stroke-width="8" stroke-dasharray="' + circumference + '" stroke-dashoffset="' + offset + '" stroke-linecap="round"/></svg><div class="calorie-ring-center"><span class="calorie-ring-num">' + nutrition.calories + '</span><span class="calorie-ring-label">已摄入kcal</span></div></div>'
-    html += '<div class="calorie-info"><div class="calorie-remain"><span class="remain-icon">🎯</span><div class="remain-detail"><span class="remain-label">剩余</span><span class="remain-value">' + (remain > 0 ? remain : 0) + ' kcal</span></div></div>'
-    html += '<div class="calorie-target"><span class="target-icon">🏁</span><div class="target-detail"><span class="target-label">目标</span><span class="target-value">' + targetCal + ' kcal</span></div></div></div></div>'
-    html += '<div class="nutrient-row">'
-    html += nutrientItem('蛋白质', nutrition.protein, tp, 'g', '#4FC3F7')
-    html += nutrientItem('脂肪', nutrition.fat, tf, 'g', '#FFD54F')
-    html += nutrientItem('碳水', nutrition.carbs, tc, 'g', '#CE93D8')
-    html += '</div></div></div>'
+    html += '<div class="header-right"><div class="day-type-badge" style="border-color:' + dayColor + ';color:' + dayColor + '" onclick="App.showDayTypePicker()"><span class="day-type-emoji">' + (dayType === 'high' ? '🔥' : dayType === 'medium' ? '🌿' : '🧘') + '</span><span>' + (dayType === 'high' ? '高碳日' : dayType === 'medium' ? '中碳日' : '低碳日') + '</span><span class="day-type-arrow">▼</span></div>'
+    html += '<div class="header-edit-btn' + (editingNutritionHeader ? ' header-edit-active' : '') + (isManual ? ' header-edit-manual' : '') + '" onclick="App.toggleNutritionEdit()">' + (isManual ? '✏️已手动' : '✏️') + '</div>'
+    html += '<div class="header-edit-btn" onclick="App.toggleCalUnit()" style="font-size:11px;margin-left:4px" title="切换千卡/千焦">' + (typeof getCalUnit === 'function' && getCalUnit() === 'kj' ? 'kJ' : 'kcal') + '</div></div></div>'
+
+    var calUnit = typeof getCalUnit === 'function' ? getCalUnit() : 'kcal'
+    var calLabel = calUnit === 'kj' ? '已摄入kJ' : '已摄入kcal'
+    if (editingNutritionHeader) {
+      html += '<div class="calorie-ring-wrap"><div class="calorie-ring"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="8"/><circle cx="50" cy="50" r="45" fill="none" stroke="#fff" stroke-width="8" stroke-dasharray="' + circumference + '" stroke-dashoffset="' + offset + '" stroke-linecap="round"/></svg><div class="calorie-ring-center"><input class="header-input header-input-big" id="header-edit-cal" type="number" min="0" step="1" value="' + (typeof toDisplayCal === 'function' ? toDisplayCal(nutrition.calories) : nutrition.calories) + '" oninput="App.onHeaderNutritionChange()"><span class="calorie-ring-label">' + calLabel + '</span></div></div>'
+      html += '<div class="calorie-info"><div class="calorie-remain"><span class="remain-icon">🎯</span><div class="remain-detail"><span class="remain-label">剩余</span><span class="remain-value">' + (typeof formatCalDisplay === 'function' ? formatCalDisplay(Math.max(0, remain)) : Math.max(0, remain) + ' kcal') + '</span></div></div>'
+      html += '<div class="calorie-target"><span class="target-icon">🏁</span><div class="target-detail"><span class="target-label">目标</span><span class="target-value">' + (typeof formatCalDisplay === 'function' ? formatCalDisplay(targetCal) : targetCal + ' kcal') + '</span></div></div></div></div>'
+      html += '<div class="nutrient-row nutrient-row-edit">'
+      html += nutrientEditItem('蛋白质', COLORS.protein, 'protein', nutrition.protein)
+      html += nutrientEditItem('脂肪', COLORS.fat, 'fat', nutrition.fat)
+      html += nutrientEditItem('碳水', COLORS.carbs, 'carbs', nutrition.carbs)
+      html += '</div>'
+      html += '<div class="header-edit-actions"><button class="header-edit-save" onclick="App.saveNutritionEdit()">💾 保存</button><button class="header-edit-restore" onclick="App.restoreAutoNutrition()">🔄 恢复自动计算</button></div>'
+    } else {
+      html += '<div class="calorie-ring-wrap"><div class="calorie-ring"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="8"/><circle cx="50" cy="50" r="45" fill="none" stroke="#fff" stroke-width="8" stroke-dasharray="' + circumference + '" stroke-dashoffset="' + offset + '" stroke-linecap="round"/></svg><div class="calorie-ring-center">' + (isManual ? '<span class="calorie-ring-num manual-indicator">' + (typeof toDisplayCal === 'function' ? toDisplayCal(nutrition.calories) : nutrition.calories) + '</span>' : '<span class="calorie-ring-num">' + (typeof toDisplayCal === 'function' ? toDisplayCal(nutrition.calories) : nutrition.calories) + '</span>') + '<span class="calorie-ring-label">' + calLabel + '</span></div></div>'
+      html += '<div class="calorie-info"><div class="calorie-remain"><span class="remain-icon">🎯</span><div class="remain-detail"><span class="remain-label">剩余</span><span class="remain-value">' + (typeof formatCalDisplay === 'function' ? formatCalDisplay(Math.max(0, remain)) : Math.max(0, remain) + ' kcal') + '</span></div></div>'
+      html += '<div class="calorie-target"><span class="target-icon">🏁</span><div class="target-detail"><span class="target-label">目标</span><span class="target-value">' + (typeof formatCalDisplay === 'function' ? formatCalDisplay(targetCal) : targetCal + ' kcal') + '</span></div></div></div></div>'
+      html += '<div class="nutrient-row">'
+      html += nutrientItem('蛋白质', nutrition.protein, tp, 'g', COLORS.protein)
+      html += nutrientItem('脂肪', nutrition.fat, tf, 'g', COLORS.fat)
+      html += nutrientItem('碳水', nutrition.carbs, tc, 'g', COLORS.carbs)
+      html += '</div>'
+    }
+    html += '</div></div>'
 
     html += '<div class="card nutrients-card"><div class="section-title">营养素详情</div>'
-    html += nutrientBlock('💪', '蛋白质', nutrition.protein, tp, 'g', 'protein-bg', 'progress-protein')
-    html += nutrientBlock('🥑', '脂肪', nutrition.fat, tf, 'g', 'fat-bg', 'progress-fat')
-    html += nutrientBlock('🍞', '碳水', nutrition.carbs, tc, 'g', 'carbs-bg', 'progress-carbs')
+    html += nutrientBlock('💪', '蛋白质', nutrition.protein, Math.max(0, tp - nutrition.protein), tp, 'g', 'protein-bg', 'progress-protein')
+    html += nutrientBlock('🥑', '脂肪', nutrition.fat, Math.max(0, tf - nutrition.fat), tf, 'g', 'fat-bg', 'progress-fat')
+    html += nutrientBlock('🍞', '碳水', nutrition.carbs, Math.max(0, tc - nutrition.carbs), tc, 'g', 'carbs-bg', 'progress-carbs')
     html += '</div>'
 
     var meals = { breakfast: { label: '🌅 早餐', items: [] }, lunch: { label: '☀️ 午餐', items: [] }, dinner: { label: '🌙 晚餐', items: [] }, snack: { label: '🍪 加餐', items: [] } }
@@ -142,7 +193,7 @@
     for (var mk in meals) {
       var m = meals[mk]
       var mcal = m.items.reduce(function(s, r) { return s + (r.nutrition.calories || 0) }, 0)
-      html += '<div class="card meal-group"><div class="meal-header"><div class="meal-type-left"><span class="meal-type">' + m.label + '</span><span class="meal-count">' + m.items.length + '项</span></div><span class="meal-cal">' + mcal + ' kcal</span></div>'
+      html += '<div class="card meal-group"><div class="meal-header"><div class="meal-type-left"><span class="meal-type">' + m.label + '</span><span class="meal-count">' + m.items.length + '项</span></div><span class="meal-cal">' + (typeof formatCalDisplay === 'function' ? formatCalDisplay(mcal) : mcal + ' kcal') + '</span></div>'
       if (m.items.length === 0) {
         html += '<div class="empty-illustration"><span class="empty-emoji">🍽️</span><span class="empty-text">暂无记录</span></div>'
       } else {
@@ -213,9 +264,14 @@
     return '<div class="nutrient-item"><span class="nutrient-name">' + name + '</span><span class="nutrient-amount">' + current + '/' + (target || '-') + unit + '</span><div class="progress-bar"><div class="progress-fill" style="width:' + (pct * 100) + '%;background:' + color + '"></div></div></div>'
   }
 
-  function nutrientBlock(emoji, name, current, target, unit, bgClass, fillClass) {
+  function nutrientEditItem(name, color, key, value) {
+    return '<div class="nutrient-item nutrient-item-edit"><span class="nutrient-name">' + name + '</span><input class="header-input" id="header-edit-' + key + '" type="number" min="0" step="0.1" value="' + value + '" oninput="App.onHeaderNutritionChange()"><span class="nutrient-unit">g</span></div>'
+  }
+
+  function nutrientBlock(emoji, name, current, remaining, target, unit, bgClass, fillClass) {
     var pct = target > 0 ? Math.min(current / target, 1) : 0
-    return '<div class="nutrient-item-block"><div class="nutrient-header"><div class="nutrient-icon-wrap ' + bgClass + '"><span class="nutrient-emoji">' + emoji + '</span></div><div class="nutrient-info"><div class="nutrient-name-row"><span class="nutrient-name-text">' + name + '</span><span class="nutrient-amount-text">' + current + ' / ' + (target || '-') + ' ' + unit + '</span></div><div class="nutrient-progress-bar"><div class="nutrient-progress-fill ' + fillClass + '" style="width:' + (pct * 100) + '%"></div></div></div></div></div>'
+    var displayRemaining = remaining != null && remaining >= 0 ? remaining : '-'
+    return '<div class="nutrient-item-block"><div class="nutrient-header"><div class="nutrient-icon-wrap ' + bgClass + '"><span class="nutrient-emoji">' + emoji + '</span></div><div class="nutrient-info"><div class="nutrient-name-row"><span class="nutrient-name-text">' + name + '</span><span class="nutrient-amount-text">' + current + ' / ' + displayRemaining + ' ' + unit + '</span></div><div class="nutrient-progress-bar"><div class="nutrient-progress-fill ' + fillClass + '" style="width:' + (pct * 100) + '%"></div></div></div></div></div>'
   }
 
   function getFoodsByTopCategory(topCategoryLabel) {
@@ -271,7 +327,7 @@
         var proVal = hasCustom && item.customNutrition.protein != null ? item.customNutrition.protein : n.protein
         var fatVal = hasCustom && item.customNutrition.fat != null ? item.customNutrition.fat : n.fat
         var carbsVal = hasCustom && item.customNutrition.carbs != null ? item.customNutrition.carbs : n.carbs
-        html += '<div class="cart-item"><div class="cart-item-left"><div class="food-avatar" style="background:' + item.avatarBg + ';width:36px;height:36px;font-size:18px;border-radius:8px">' + item.emoji + '</div><div class="cart-item-info"><span class="cart-item-name">' + item.name + '</span><div class="cart-item-nutrition-edit"><span class="nutri-edit-item"><input class="nutri-input" type="number" value="' + calVal + '" onchange="App.cartSetNutrition(' + idx + ',\'calories\',this.value)" min="0"><span class="nutri-label">kcal</span></span><span class="nutri-edit-item"><input class="nutri-input" type="number" value="' + proVal + '" onchange="App.cartSetNutrition(' + idx + ',\'protein\',this.value)" min="0" step="0.1"><span class="nutri-label">蛋白g</span></span><span class="nutri-edit-item"><input class="nutri-input" type="number" value="' + fatVal + '" onchange="App.cartSetNutrition(' + idx + ',\'fat\',this.value)" min="0" step="0.1"><span class="nutri-label">脂肪g</span></span><span class="nutri-edit-item"><input class="nutri-input" type="number" value="' + carbsVal + '" onchange="App.cartSetNutrition(' + idx + ',\'carbs\',this.value)" min="0" step="0.1"><span class="nutri-label">碳水g</span></span></div></div></div><div class="cart-item-right"><div class="cart-weight-ctrl"><span class="cart-weight-btn" onclick="App.cartChangeWeight(' + idx + ',-10)">−</span><input class="cart-weight-input" type="number" value="' + item.weight + '" onchange="App.cartSetWeight(' + idx + ',this.value)"><span class="cart-weight-btn" onclick="App.cartChangeWeight(' + idx + ',10)">+</span></div><span class="cart-item-delete" onclick="App.cartRemove(' + idx + ')">✕</span></div></div>'
+        html += '<div class="cart-item"><div class="cart-item-left"><div class="food-avatar" style="background:' + item.avatarBg + ';width:36px;height:36px;font-size:18px;border-radius:8px">' + item.emoji + '</div><div class="cart-item-info"><span class="cart-item-name">' + item.name + '</span><div class="cart-item-nutrition-edit"><span class="nutri-edit-item"><input class="nutri-input" type="number" value="' + calVal + '" onchange="App.cartSetNutrition(' + idx + ',\'calories\',this.value)" min="0"><span class="nutri-label">kcal</span></span><span class="nutri-edit-item"><input class="nutri-input" type="number" value="' + proVal + '" onchange="App.cartSetNutrition(' + idx + ',\'protein\',this.value)" min="0" step="0.1"><span class="nutri-label">蛋白g</span></span><span class="nutri-edit-item"><input class="nutri-input" type="number" value="' + fatVal + '" onchange="App.cartSetNutrition(' + idx + ',\'fat\',this.value)" min="0" step="0.1"><span class="nutri-label">脂肪g</span></span><span class="nutri-edit-item"><input class="nutri-input" type="number" value="' + carbsVal + '" onchange="App.cartSetNutrition(' + idx + ',\'carbs\',this.value)" min="0" step="0.1"><span class="nutri-label">碳水g</span></span></div></div></div><div class="cart-item-right"><div class="cart-weight-ctrl"><span class="cart-weight-btn" onclick="App.cartChangeWeight(' + idx + ',-10)">−</span><input class="cart-weight-input" type="number" value="' + item.weight + '" onchange="App.cartSetWeight(' + idx + ',this.value)" step="0.1"><span class="cart-weight-btn"onclick="App.cartChangeWeight(' + idx + ',10)">+</span></div><span class="cart-item-delete" onclick="App.cartRemove(' + idx + ')">✕</span></div></div>'
       })
       html += '<div class="cart-summary"><div class="cart-summary-row"><span class="cart-summary-label">合计</span><span class="cart-summary-val" style="color:#4CAF50">' + totalCal + ' kcal</span><span class="cart-summary-val" style="color:#2196F3">蛋白' + Math.round(totalPro * 10) / 10 + 'g</span><span class="cart-summary-val" style="color:#FF9800">脂肪' + Math.round(totalFat * 10) / 10 + 'g</span><span class="cart-summary-val" style="color:#9C27B0">碳水' + Math.round(totalCarbs * 10) / 10 + 'g</span></div></div>'
       html += '</div>'
@@ -366,11 +422,11 @@
     html += '<div class="hero-action" onclick="App.showWeekPlan()"><span>全周计划</span><span class="hero-action-arrow">›</span></div></div>'
     html += '<div class="hero-calories"><span class="hero-cal-number">' + plan.targetCalories + '</span><span class="hero-cal-unit">kcal</span></div>'
     html += '<div class="hero-macros">'
-    html += heroMacro('蛋白质', plan.protein + 'g', plan.proteinRatio + '%', '#4FC3F7')
+    html += heroMacro('蛋白质', plan.protein + 'g', plan.proteinRatio + '%', COLORS.protein)
     html += '<div class="hero-macro-divider"></div>'
-    html += heroMacro('脂肪', plan.fat + 'g', plan.fatRatio + '%', '#FFD54F')
+    html += heroMacro('脂肪', plan.fat + 'g', plan.fatRatio + '%', COLORS.fat)
     html += '<div class="hero-macro-divider"></div>'
-    html += heroMacro('碳水', plan.carbs + 'g', plan.carbsRatio + '%', '#CE93D8')
+    html += heroMacro('碳水', plan.carbs + 'g', plan.carbsRatio + '%', COLORS.carbs)
     html += '</div></div></div>'
 
     var nutrition = getTodayNutrition()
@@ -685,6 +741,10 @@
   }
 
   window.App = {
+    toggleCalUnit: function() {
+      if (typeof toggleCalUnit === 'function') toggleCalUnit()
+      renderPage(currentPage)
+    },
     loginWithPhone: function() {
       var input = $('#login-phone')
       var phone = input ? input.value : ''
@@ -711,28 +771,32 @@
     switchPage: switchPage,
     goRecord: function() { switchPage('record') },
     onSearch: function(kw) {
-      var clearBtn = $('#search-clear')
-      if (clearBtn) clearBtn.style.display = kw ? 'flex' : 'none'
-      var catWrap = $('#category-tabs-wrap')
-      var subWrap = $('#sub-category-tabs-wrap')
-      if (kw) {
-        if (catWrap) catWrap.style.display = 'none'
-        if (subWrap) subWrap.style.display = 'none'
-        renderFoodList(searchFoods(kw))
-      } else {
-        if (catWrap) catWrap.style.display = 'block'
-        if (activeTopCategory) {
-          var tc = topCategoryConfig.find(function(t) { return t.label === activeTopCategory })
-          if (tc) {
-            if (subWrap) subWrap.style.display = 'block'
-            var foods = getFoodsByTopCategory(activeTopCategory)
-            if (activeSubCategory) foods = foods.filter(function(f) { return f.category === activeSubCategory })
-            renderFoodList(foods)
-            return
+      if (_searchTimer) clearTimeout(_searchTimer)
+      _searchTimer = setTimeout(function() {
+        _searchTimer = null
+        var clearBtn = $('#search-clear')
+        if (clearBtn) clearBtn.style.display = kw ? 'flex' : 'none'
+        var catWrap = $('#category-tabs-wrap')
+        var subWrap = $('#sub-category-tabs-wrap')
+        if (kw) {
+          if (catWrap) catWrap.style.display = 'none'
+          if (subWrap) subWrap.style.display = 'none'
+          renderFoodList(searchFoods(kw))
+        } else {
+          if (catWrap) catWrap.style.display = 'block'
+          if (activeTopCategory) {
+            var tc = topCategoryConfig.find(function(t) { return t.label === activeTopCategory })
+            if (tc) {
+              if (subWrap) subWrap.style.display = 'block'
+              var foods = getFoodsByTopCategory(activeTopCategory)
+              if (activeSubCategory) foods = foods.filter(function(f) { return f.category === activeSubCategory })
+              renderFoodList(foods)
+              return
+            }
           }
+          renderFoodList(searchFoods(''))
         }
-        renderFoodList(searchFoods(''))
-      }
+      }, 200)
     },
     clearSearch: function() {
       var input = $('#food-search')
@@ -822,14 +886,16 @@
     },
     cartChangeWeight: function(idx, delta) {
       if (idx >= 0 && idx < cart.length) {
-        cart[idx].weight = Math.max(10, cart[idx].weight + delta)
+        var newW = Math.max(10, cart[idx].weight + delta)
+        cart[idx].weight = typeof roundWeight === 'function' ? roundWeight(newW) : Math.round(newW * 10) / 10
         renderRecord()
       }
     },
     cartSetWeight: function(idx, val) {
       if (idx >= 0 && idx < cart.length) {
         var w = parseFloat(val)
-        cart[idx].weight = (isNaN(w) || w < 10) ? 10 : Math.round(w)
+        if (isNaN(w) || w < 10) w = 10
+        cart[idx].weight = typeof roundWeight === 'function' ? roundWeight(w) : Math.round(w * 10) / 10
         renderRecord()
       }
     },
@@ -938,6 +1004,48 @@
       closeModal()
       renderPage(currentPage)
     },
+    toggleNutritionEdit: function() {
+      editingNutritionHeader = !editingNutritionHeader
+      renderIndex()
+    },
+    onHeaderNutritionChange: function() {
+      var calEl = document.getElementById('header-edit-cal')
+      var calVal = calEl ? parseFloat(calEl.value) : 0
+      if (isNaN(calVal) || calVal < 0) calVal = 0
+      var proEl = document.getElementById('header-edit-protein')
+      var proVal = proEl ? parseFloat(proEl.value) : 0
+      if (isNaN(proVal) || proVal < 0) proVal = 0
+      var fatEl = document.getElementById('header-edit-fat')
+      var fatVal = fatEl ? parseFloat(fatEl.value) : 0
+      if (isNaN(fatVal) || fatVal < 0) fatVal = 0
+      var carbsEl = document.getElementById('header-edit-carbs')
+      var carbsVal = carbsEl ? parseFloat(carbsEl.value) : 0
+      if (isNaN(carbsVal) || carbsVal < 0) carbsVal = 0
+    },
+    saveNutritionEdit: function() {
+      var calEl = document.getElementById('header-edit-cal')
+      var calVal = calEl ? parseFloat(calEl.value) : 0
+      if (isNaN(calVal) || calVal < 0) calVal = 0
+      var proEl = document.getElementById('header-edit-protein')
+      var proVal = proEl ? parseFloat(proEl.value) : 0
+      if (isNaN(proVal) || proVal < 0) proVal = 0
+      var fatEl = document.getElementById('header-edit-fat')
+      var fatVal = fatEl ? parseFloat(fatEl.value) : 0
+      if (isNaN(fatVal) || fatVal < 0) fatVal = 0
+      var carbsEl = document.getElementById('header-edit-carbs')
+      var carbsVal = carbsEl ? parseFloat(carbsEl.value) : 0
+      if (isNaN(carbsVal) || carbsVal < 0) carbsVal = 0
+      saveManualNutrition({ calories: calVal, protein: proVal, fat: fatVal, carbs: carbsVal })
+      editingNutritionHeader = false
+      renderIndex()
+    },
+    restoreAutoNutrition: function() {
+      if (confirm('确定恢复自动计算吗？手动修改的数据将被清除。')) {
+        saveManualNutrition(null)
+        editingNutritionHeader = false
+        renderIndex()
+      }
+    },
     showWeekPlan: function() {
       var plan = getTodayPlan()
       if (!plan || !plan.hasCarbCycling) { alert('暂无碳循环计划'); return }
@@ -953,7 +1061,7 @@
         var dayPlan = dt === 'high' ? plan.highCarbDay : (dt === 'medium' ? plan.mediumCarbDay : plan.lowCarbDay)
         if (!dayPlan) dayPlan = plan.lowCarbDay
         var isToday = i === todayIdx
-        var typeColor = dt === 'high' ? '#FF6D00' : (dt === 'medium' ? '#7CB342' : '#2196F3')
+        var typeColor = dt === 'high' ? COLORS.highCarb : (dt === 'medium' ? COLORS.mediumCarb : COLORS.lowCarb)
         var typeLabel = dt === 'high' ? '🔥高碳' : (dt === 'medium' ? '🌿中碳' : '🧘低碳')
         html += '<div class="week-row' + (isToday ? ' week-row-today' : '') + '"><span class="week-col-day">' + days[i] + (isToday ? ' 👈' : '') + '</span><span class="week-col-type" style="color:' + typeColor + '">' + typeLabel + '</span><span class="week-col-cal">' + dayPlan.calories + '</span><span class="week-col-carbs">' + dayPlan.carbs + 'g</span></div>'
       }
@@ -983,35 +1091,29 @@
       alert('自定义计划已保存')
       renderPage(currentPage)
     },
+    _readProfileForm: function(existing) {
+      var p = existing || {}
+      p.name = ($('#profile-name') || {}).value || p.name || ''
+      p.age = parseInt(($('#profile-age') || {}).value) || p.age || 0
+      p.height = parseFloat(($('#profile-height') || {}).value) || p.height || 0
+      p.weight = parseFloat(($('#profile-weight') || {}).value) || p.weight || 0
+      p.bodyFatRate = parseFloat(($('#profile-bodyFatRate') || {}).value) || p.bodyFatRate || 0
+      return p
+    },
     setGender: function(g) {
-      var profile = getUserProfile() || {}
-      profile.name = ($('#profile-name') || {}).value || profile.name || ''
-      profile.age = parseInt(($('#profile-age') || {}).value) || profile.age || 0
-      profile.height = parseFloat(($('#profile-height') || {}).value) || profile.height || 0
-      profile.weight = parseFloat(($('#profile-weight') || {}).value) || profile.weight || 0
-      profile.bodyFatRate = parseFloat(($('#profile-bodyFatRate') || {}).value) || profile.bodyFatRate || 0
+      var profile = App._readProfileForm(getUserProfile() || {})
       profile.gender = g
       saveUserProfile(profile)
       renderProfile()
     },
     setActivity: function(v) {
-      var profile = getUserProfile() || {}
-      profile.name = ($('#profile-name') || {}).value || profile.name || ''
-      profile.age = parseInt(($('#profile-age') || {}).value) || profile.age || 0
-      profile.height = parseFloat(($('#profile-height') || {}).value) || profile.height || 0
-      profile.weight = parseFloat(($('#profile-weight') || {}).value) || profile.weight || 0
-      profile.bodyFatRate = parseFloat(($('#profile-bodyFatRate') || {}).value) || profile.bodyFatRate || 0
+      var profile = App._readProfileForm(getUserProfile() || {})
       profile.activityLevel = v
       saveUserProfile(profile)
       renderProfile()
     },
     setGoal: function(v) {
-      var profile = getUserProfile() || {}
-      profile.name = ($('#profile-name') || {}).value || profile.name || ''
-      profile.age = parseInt(($('#profile-age') || {}).value) || profile.age || 0
-      profile.height = parseFloat(($('#profile-height') || {}).value) || profile.height || 0
-      profile.weight = parseFloat(($('#profile-weight') || {}).value) || profile.weight || 0
-      profile.bodyFatRate = parseFloat(($('#profile-bodyFatRate') || {}).value) || profile.bodyFatRate || 0
+      var profile = App._readProfileForm(getUserProfile() || {})
       profile.goal = v
       saveUserProfile(profile)
       renderProfile()

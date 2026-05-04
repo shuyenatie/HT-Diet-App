@@ -30,7 +30,7 @@ function getAccountStorageKey(phone, key) {
 }
 
 function shouldScopeStorageKey(key) {
-  return LOCAL_ACCOUNT_BASE_KEYS.indexOf(key) >= 0 || String(key).indexOf('manualDayType_') === 0
+  return LOCAL_ACCOUNT_BASE_KEYS.indexOf(key) >= 0 || String(key).indexOf('manualDayType_') === 0 || String(key).indexOf('manualNutrition_') === 0
 }
 
 function getCurrentPhone() {
@@ -365,18 +365,7 @@ function generateDietPlan(profile) {
     : dailyTargetCal
 
   function buildMeals(cal, pro, f, cb) {
-    var ratios = { breakfast: { ratio: 0.3, label: '早餐' }, lunch: { ratio: 0.4, label: '午餐' }, dinner: { ratio: 0.3, label: '晚餐' } }
-    var meals = {}
-    for (var k in ratios) {
-      meals[k] = {
-        label: ratios[k].label,
-        calories: Math.round(cal * ratios[k].ratio),
-        protein: Math.round(pro * ratios[k].ratio),
-        fat: Math.round(f * ratios[k].ratio),
-        carbs: Math.round(cb * ratios[k].ratio)
-      }
-    }
-    return meals
+    return _buildMealsFromMacros(cal, pro, f, cb)
   }
 
   return {
@@ -402,19 +391,23 @@ function generateDietPlan(profile) {
   }
 }
 
-function buildMealsFromDay(dp) {
+function _buildMealsFromMacros(cal, pro, f, cb) {
   var ratios = { breakfast: { ratio: 0.3, label: '早餐' }, lunch: { ratio: 0.4, label: '午餐' }, dinner: { ratio: 0.3, label: '晚餐' } }
   var meals = {}
   for (var k in ratios) {
     meals[k] = {
       label: ratios[k].label,
-      calories: Math.round(dp.calories * ratios[k].ratio),
-      protein: Math.round(dp.protein * ratios[k].ratio),
-      fat: Math.round(dp.fat * ratios[k].ratio),
-      carbs: Math.round(dp.carbs * ratios[k].ratio)
+      calories: Math.round(cal * ratios[k].ratio),
+      protein: Math.round(pro * ratios[k].ratio),
+      fat: Math.round(f * ratios[k].ratio),
+      carbs: Math.round(cb * ratios[k].ratio)
     }
   }
   return meals
+}
+
+function buildMealsFromDay(dp) {
+  return _buildMealsFromMacros(dp.calories, dp.protein, dp.fat, dp.carbs)
 }
 
 function getWeekStart() {
@@ -733,6 +726,37 @@ function getTodayNutrition() {
   return t
 }
 
+function getManualNutritionKey() {
+  return 'manualNutrition_' + formatDate(new Date())
+}
+
+function getManualNutrition() {
+  return _getStorage(getManualNutritionKey())
+}
+
+function saveManualNutrition(nutrition) {
+  if (nutrition === null) {
+    _removeStorage(getManualNutritionKey())
+  } else {
+    _setStorage(getManualNutritionKey(), {
+      calories: roundNutrition(nutrition.calories || 0),
+      protein: roundNutrition(nutrition.protein || 0),
+      fat: roundNutrition(nutrition.fat || 0),
+      carbs: roundNutrition(nutrition.carbs || 0)
+    })
+  }
+}
+
+function hasManualNutrition() {
+  return !!getManualNutrition()
+}
+
+function getEffectiveTodayNutrition() {
+  var manual = getManualNutrition()
+  if (manual) return manual
+  return getTodayNutrition()
+}
+
 function addDietRecord(record) {
   var all = _getStorage('dietRecords') || []
   var nr = {
@@ -793,6 +817,39 @@ function roundTo(value, decimals) {
 
 function roundWeight(value) {
   return roundTo(value, 1)
+}
+
+var KCAL_TO_KJ = 4.184
+
+function _getCalUnit() {
+  try { return _readRawStorage('calorieUnit') || 'kcal' } catch { return 'kcal' }
+}
+
+function _setCalUnit(unit) {
+  try { _writeRawStorage('calorieUnit', unit) } catch {}
+}
+
+function toggleCalUnit() {
+  var next = _getCalUnit() === 'kcal' ? 'kj' : 'kcal'
+  _setCalUnit(next)
+  return next
+}
+
+function getCalUnit() {
+  return _getCalUnit()
+}
+
+function toDisplayCal(kcal) {
+  var n = parseFloat(kcal)
+  if (isNaN(n)) n = 0
+  if (_getCalUnit() === 'kj') return Math.round(n * KCAL_TO_KJ)
+  return Math.round(n)
+}
+
+function formatCalDisplay(kcal) {
+  var unit = _getCalUnit()
+  if (unit === 'kj') return Math.round(parseFloat(kcal) * KCAL_TO_KJ) + ' kJ'
+  return Math.round(parseFloat(kcal)) + ' kcal'
 }
 
 function roundNutrition(value) {
